@@ -2,6 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/eligibility-pipeline)](https://pypi.org/project/eligibility-pipeline/)
 [![Python](https://img.shields.io/pypi/pyversions/eligibility-pipeline)](https://pypi.org/project/eligibility-pipeline/)
+[![CI](https://github.com/mssdef/edi-pipeline-gh/actions/workflows/ci.yml/badge.svg)](https://github.com/mssdef/edi-pipeline-gh/actions/workflows/ci.yml)
 
 X12 270/271 eligibility pipeline — parse, validate, persist, and process healthcare eligibility transactions via Azure Functions.
 
@@ -71,11 +72,11 @@ docker compose up -d
 alembic upgrade head
 ```
 
-### 4. Configure Azure Functions
+### 4. Configure the Functions host
 
 ```bash
 cp azure_functions/local.settings.json.example azure_functions/local.settings.json
-# Edit local.settings.json — see "Azure Functions local setup" below
+# Fill in DATABASE_URL and any Azure keys — see Required keys below
 ```
 
 ### 5. Start the Functions host
@@ -92,6 +93,40 @@ curl -X POST http://localhost:7071/api/process \
      --data-binary @samples/270_request.edi \
      -H "Content-Type: text/plain"
 ```
+
+---
+
+## HTTP API
+
+### `POST /api/process`
+
+Send a raw X12 EDI string as the request body.
+
+```bash
+curl -X POST http://localhost:7071/api/process \
+     --data-binary @samples/270_request.edi \
+     -H "Content-Type: text/plain"
+```
+
+**Response** — `ProcessResponse` JSON:
+
+```json
+{
+  "status": "SUCCESS",
+  "raw_id": "a1b2c3d4-...",
+  "errors": [],
+  "transaction_set_id": "270"
+}
+```
+
+**Status codes:**
+
+| Code | Meaning |
+|------|---------|
+| `200` | Message processed successfully |
+| `400` | Parse failure — bad EDI payload |
+| `409` | Duplicate — same payload already processed |
+| `500` | Unexpected server error |
 
 ---
 
@@ -132,62 +167,61 @@ curl -X POST http://localhost:7071/api/process \
      -H "Content-Type: text/plain"
 ```
 
-The deduplication hash is only enforced once per payload that has been **successfully processed**. A `PARSE_FAILURE` row does not block resubmission — the pipeline will process the message normally on the next attempt.
+The deduplication hash is only enforced for payloads that have been **successfully processed**. A `PARSE_FAILURE` row does not block resubmission — the pipeline will process the message normally on the next attempt.
 
 ---
 
-## Azure Functions — local setup
+## Azure Functions — local settings
 
-Copy the example settings file and fill in real values:
+`local.settings.json` is gitignored and never committed. Copy the example and fill in values:
 
 ```bash
 cp azure_functions/local.settings.json.example azure_functions/local.settings.json
 ```
 
-`local.settings.json` is gitignored and never committed.
-
 ### Required keys
 
-| Key | Description |
-|-----|-------------|
-| `FUNCTIONS_WORKER_RUNTIME` | Must be `python`. |
-| `AzureWebJobsStorage` | Storage connection string. Use `UseDevelopmentStorage=true` with Azurite for local dev. |
-| `DATABASE_URL` | PostgreSQL connection string. Matches `docker-compose.yml` defaults: `postgresql+psycopg://edi:edi@localhost:5432/eligibility` |
-| `LOG_LEVEL` | `DEBUG` locally, `INFO` in production. |
-| `AZURE_SERVICEBUS_CONNECTION_STRING` | Service Bus namespace connection string. Required for the queue trigger; omit for HTTP-only local testing. |
-| `AZURE_SERVICEBUS_QUEUE_NAME` | Name of the inbound queue (e.g. `edi-inbound`). |
-| `AZURE_STORAGE_ACCOUNT` | Storage account name for raw message archive. Optional for local dev. |
-| `AZURE_STORAGE_CONTAINER` | Blob container for raw message archive (e.g. `edi-raw`). Optional for local dev. |
+| Key | Required | Description |
+|-----|----------|-------------|
+| `FUNCTIONS_WORKER_RUNTIME` | Yes | Must be `python`. |
+| `AzureWebJobsStorage` | Yes | Storage connection string. Use `UseDevelopmentStorage=true` with Azurite for local dev. |
+| `DATABASE_URL` | Yes | PostgreSQL connection string. Default: `postgresql+psycopg://edi:edi@localhost:5432/eligibility` |
+| `LOG_LEVEL` | Yes | `DEBUG` locally, `INFO` in production. |
+| `AZURE_SERVICEBUS_CONNECTION_STRING` | Queue trigger only | Service Bus namespace connection string. Omit for HTTP-only local testing. |
+| `AZURE_SERVICEBUS_QUEUE_NAME` | Queue trigger only | Name of the inbound queue (e.g. `edi-inbound`). |
+| `AZURE_STORAGE_ACCOUNT` | Optional | Storage account name for raw message archive. |
+| `AZURE_STORAGE_CONTAINER` | Optional | Blob container for raw message archive (e.g. `edi-raw`). |
 
-### Running locally
+---
 
-```bash
-# 1. Start local stack (Postgres + migrations + Azurite + Functions host)
-docker compose up -d
+## Project structure
 
-# 2. Send a test message
-curl -X POST http://localhost:7071/api/process \
-     --data-binary @samples/270_request.edi \
-     -H "Content-Type: text/plain"
 ```
-
-If you want to run the Functions host directly on your machine instead of Docker:
-
-```bash
-cd azure_functions
-func start
+src/eligibility_pipeline/
+  __init__.py              ← __version__ = "0.1.0"
+  py.typed                 ← PEP 561 marker
+  cli.py                   ← eligibility-pipeline CLI entry point
+  parse.py                 ← parse_edi + ParseResult / ParseError
+  models.py                ← ProcessRequest / ProcessResponse / ErrorDetail
+  settings.py              ← pydantic-settings Settings
+  db/
+    models.py              ← SQLModel tables (RawEdiMessage, EligibilityTransaction,
+    session.py               CoverageSnapshot, PipelineRun) + enums
+    migrations/            ← Alembic env + initial migration
+  services/
+    process_message.py     ← core ingest service
+  mappers/
+    x12_to_domain.py       ← parsed X12 → domain models
+azure_functions/
+  function_app.py          ← Service Bus + HTTP triggers
+  host.json
+  requirements.txt         ← eligibility-pipeline[azure]
+  local.settings.json.example
+samples/
+  270_request.edi          ← synthetic 270 inquiry fixture
+  271_response.edi         ← synthetic 271 response fixture
+tests/
+  test_parse.py
+  test_process_message.py
+.github/workflows/ci.yml   ← lint + test + publish
 ```
-
-For compose-based local testing, the Service Bus trigger is disabled by default
-(`AzureWebJobs.ingest_from_service_bus.Disabled=true`) so HTTP tests can run
-without a live Service Bus namespace.
-
-### HTTP integration tests (optional)
-
-From the repo root, with `docker compose up -d` running:
-
-```bash
-pytest -m azure_http
-```
-
-Optional: `AZURE_FUNCTIONS_HTTP_BASE_URL`, `AZURE_FUNCTIONS_FUNCTION_KEY` (see `tests/test_azure_functions_http.py`).
