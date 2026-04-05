@@ -6,7 +6,7 @@
 
 Nx monorepo — healthcare eligibility EDI pipeline (Phase 1) and patient portal / case management (Phase 2). Phase 1 and Phase 2 are implemented in-repo; Python and TypeScript packages share one PostgreSQL database.
 
-> **Portfolio MVP** — synthetic 270/271 fixtures, no real PHI, no production clearinghouse integration.
+> **Scope:** Synthetic 270/271 fixtures, no real PHI, no production clearinghouse integration.
 
 ---
 
@@ -282,7 +282,7 @@ GitHub Actions (`.github/workflows/`):
 
 **Phase 1 (Python):**
 - Python 3.11+ application layout, typing, Pydantic, SQLModel, PostgreSQL transactions
-- X12 270/271 EDI parsing and validation at portfolio depth
+- X12 270/271 EDI parsing and validation
 - Azure Functions HTTP + Service Bus triggers, idempotent pipeline design
 
 **Phase 2 (TypeScript / full-stack):**
